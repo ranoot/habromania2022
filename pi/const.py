@@ -4,18 +4,18 @@ import math
 l_dim = {"w": 160, "h": 120}
 e_dim = {"w": 320, "h": 240}
 boundaries = {
-	"red_upper": ((170,50,50), (0,0,0)),
-	"red_lower": ((0,50,50), (10,255,255)),
-	"green": ((50,50,50), (95,255,255)),
-	"blue": ((94, 50, 50), (125, 255, 255))
+	"red_upper": ((175,50,50), (0,0,0)), #(0, 90, 100), (20)
+	"red_lower": ((0,120,85), (10,255,255)),
+	"green": ((55,90,55), (100,255,255)),
+	"blue": ((105, 140, 100), (140, 255, 255))
 }
 crop_h = 0
 b_crop_h = 0
 gs_crop_h = 76
 b_gs_crop_h = 0
 
-b_w_thresh = 42 #
-k_p =8
+b_w_thresh = 100 #
+k_p=8
 
 lt_min_area = 50
 
@@ -40,7 +40,9 @@ st_b_crop_h = 10
 
 min_red = 40000
 
-scaled_v = scaled_vector(l_dim["h"] - b_crop_h - crop_h, 6)
+scaled_v = scaled_vector(l_dim["h"] - b_crop_h - crop_h, 7)
+scaled_v_grad = scaled_vector(l_dim["h"] - b_crop_h - crop_h, 1.3)
+
 w_scaled_v = w_scaled_vector(l_dim["w"], 10)
 gs_scaled_v = scaled_vector(l_dim["h"] - b_gs_crop_h - gs_crop_h, 0)
 scaled_m = scaled_2d_matrix(l_dim["h"] - crop_h - b_crop_h, l_dim["w"], 2.5, 0.4, 0.2)
@@ -51,3 +53,4 @@ PRINT_STATE = False
 PRINT_KIT = False #False
 PRINT_FPS = False
 FREEZE_ROTATION = False
+PRINT_STAGE = False

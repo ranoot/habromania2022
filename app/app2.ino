@@ -51,6 +51,7 @@ const float k_d = 0.001;
 // serial communication + movement vars
 double rotation = 0;
 double speed = 0;
+double aerotation = 0;
 char buffer[100];
 int buff_size = 0;
 
@@ -67,11 +68,12 @@ bool see_line = 0;
 unsigned long obs_time_start;
 double o_rotation;
 
-enum class Turn { RIGHT, LEFT };
+enum class Turn { RIGHT, LEFT, NONE };
 Turn turn = Turn::LEFT;
 
 int obs_state = 0;
 int exit_state = 0;
+int exit_turn = 0;
 
 bool alive = false;
 bool see_silver_tape = false;
@@ -80,6 +82,7 @@ bool leave_evac = false;
 bool see_kit = false;
 bool see_ball = false;
 bool see_out = false;
+bool maybe_stuck = false;
 double evac_speed = 0;
 double evac_rotation = 0;
 double evac_prev_rotation = 0;
@@ -88,8 +91,21 @@ unsigned long evac_time_start;
 unsigned long evac_turn_time;
 unsigned long evac_forward_timer;
 unsigned long pickup_timer;
+unsigned long centering_timer = millis();
 unsigned long rand_pickup_timer = millis();
-double journey[1000];
+unsigned long evac_stuck_timer = millis();
+
+int ball_repeat_counter = 0;
+unsigned long ball_repeat_timer = millis();
+
+unsigned long kit_time;
+
+unsigned long kit_time_start;
+
+double journey[250];
+int counter = 0;
+int counter2 = 0;
+int kit_state = 0;
 
 Turn evac_turn = Turn::LEFT;
 long rand_time;
@@ -97,6 +113,7 @@ long rand_time;
 int pickup_state = 0;
 
 bool see_deposit = false;
+bool see_red = false;
 double deposit_dev = 0;
 unsigned long deposit_timer;
 int deposit_state = 0;
@@ -105,6 +122,8 @@ double r_k_p = 0.005;
 double s_k_p = 0.010;
 
 int ball_counter = 0;
+
+unsigned long evac_limit_timer_start;
 
 const int trigPin = 2;
 const int echoPin = 3;
@@ -169,6 +188,11 @@ void serialEvent() {
             }
           }
           break;
+
+        case 'x':
+          {
+            see_red = true ? (uint8_t)buffer[1] == 1 : false;
+          }
 
         case 'l':
           {
@@ -301,40 +325,106 @@ void loop() {
       
       case 'l': 
       {
-//        if (front_dist < 110) {
-//          if (millis() - servo_time_start > 1000) {
-//            curry_state = 's';
-////            turn = r_side_dist > l_side_dist ? Turn::RIGHT : Turn::LEFT;
-//            turn = Turn::LEFT;
-//          }
-//        } else 
+        if (!front_dist.out_of_range && front_dist.curr < 10 && front_b_dist < 140 && !see_kit) {
+          if (millis() - servo_time_start > 1000) {
+            curry_state = 's';
+//            turn = r_side_dist > l_side_dist ? Turn::RIGHT : Turn::LEFT;
+            turn = Turn::LEFT;
+        }
+        } else 
         if (see_silver_tape) {
-          curry_state = 'A';
-          claw_down();
+          evac_limit_timer_start = millis();
+          curry_state = 'R';
           see_silver_tape = false;
-//        } else if (see_kit) {
-//          if (front_dist.curr > 10 && front_b_dist < 80) {
-//            curry_state = 'k';
-//            pickup_timer = millis();
-//          }
+          claw_down();
+          claw_open();
         } else if (see_kit) {
-          curry_state = 'k';
-        } else {
+          counter = 0;
+          curry_state = 'g'; //begin kit retrieval
+          kit_time_start = millis();
+//          see_kit = false; //may need to remove
+        }
+//        } else {
           limit_s_r(speed, rotation);
           differentialSteer(speed, rotation);
+          
+      }
+      break;
+      
+      case 'g':
+      {
+        switch(kit_state) {
+
+          case 0:
+          {
+            differentialSteer(-1, 0);
+            if (millis()-kit_time_start > 1000) {
+              kit_state++;
+              kit_time_start = millis();
+            }
+          }
+          break;
+
+          case 1:
+          {
+            claw_open();
+            claw_down();
+            differentialSteer(1, 0);
+            if (millis()-kit_time_start > 1100) {
+              kit_state++;
+              kit_time_start = millis();
+              curry_state = 'k';
+            }
+            if (front_b_dist < 80) {
+              curry_state = 'p';
+              differentialSteer(0, 0);
+              pickup_timer = millis();
+            }
+          }
+          break;
         }
       }
       break;
-
+      
       case 'k':
       {
-        if (front_dist.curr > 10 && front_b_dist < 80) {
-          curry_state = 'p';
-          differentialSteer(0, 0);
-          pickup_timer = millis();
-        } else {
-          differentialSteer(speed, rotation);
-          
+        if (millis() - kit_time_start > 500) {
+          if (front_b_dist < 80) {
+            curry_state = 'p';
+            differentialSteer(0, 0);
+            pickup_timer = millis();
+          } else {
+            limit_s_r(speed, rotation);
+            differentialSteer(speed, rotation);
+            journey[counter] = rotation;
+            counter++;
+          }
+          if (!see_kit){
+            curry_state = 'n';
+          }
+        if (millis() - kit_time_start > 10000) {
+          curry_state = 'n';
+        }
+      } else {
+        differentialSteer(0, 0);
+      }
+      }
+      break;
+
+      case 'n':
+      {
+        claw_up();
+        claw_open();
+        differentialSteer(-speed, journey[counter]);
+        journey[counter] = 0;
+        if(millis() - kit_time > 10) {
+          counter--;
+          kit_time = millis();
+        }
+        if (counter < 0) {
+          curry_state = 'l';
+          see_kit = false;
+          counter = 0;
         }
       }
       break;
@@ -347,18 +437,17 @@ void loop() {
 
         if ((millis() - pickup_timer) > 500) {
           if (front_b_dist < 80) {
-//            Serial.println("hello");
-            if (front_b_dist > 35) {
+//            if (front_b_dist > 35) {
               curry_state = 'r';
               claw_up();
               pickup_timer = millis();
-            } else {
-              curry_state = 'q'; 
-              servos_angle[Servos::LEFT] = 70;
-              servos_angle[Servos::RIGHT] = 300 - 70;
-              servo_change = true;
-              pickup_timer = millis();
-            }
+//            } else {
+//              curry_state = 'q'; 
+//              servos_angle[Servos::LEFT] = 70;
+//              servos_angle[Servos::RIGHT] = 300 - 70;
+//              servo_change = true;
+//              pickup_timer = millis();
+//            }
           } else {
             claw_open();
             curry_state = 'k';
@@ -367,16 +456,16 @@ void loop() {
       }
       break;
 
-      case 'q':
-      {
-        differentialSteer(-0.5, 0);
-        if (millis() - pickup_timer > 600) {
-          differentialSteer(0, 0);
-          pickup_timer = millis();
-          curry_state = 'p';
-        }
-       }
-       break;
+//      case 'q':
+//      {
+//        differentialSteer(-0.5, 0);
+//        if (millis() - pickup_timer > 600) {
+//          differentialSteer(0, 0);
+//          pickup_timer = millis();
+//          curry_state = 'p';
+//        }
+//       }
+//       break;
 
        case 'r':
        {
@@ -388,7 +477,6 @@ void loop() {
               pickup_timer = millis();
               servos_angle[Servos::LEFT] = 40; //chucking w ded
               servo_change = true;
-  //            claw_open(); // Insert sorting logic here
             }
           }
           break;
@@ -397,10 +485,9 @@ void loop() {
           {
             if ((millis() - pickup_timer) > 1000) {
               pickup_state=0;
-              claw_down();
               claw_open();
               pickup_timer = millis();
-              curry_state = 'p';
+              curry_state = 'n';
             }
           }
           break;
@@ -488,40 +575,54 @@ void loop() {
       }
       break;
 
+     case 'R':
+     {
+      claw_open();
+      claw_down();
+      differentialSteer(1, -0.3);
+//      if (see_line) {
+//        curry_state = 'l';
+//        claw_up();
+//        claw_open();
+//      }
+      if (millis() - evac_limit_timer_start > 2000) {
+        curry_state = 'A';
+        evac_stuck_timer = millis();
+      }
+     }
+     break;
+
      case 'A':
      {
 //      Serial.println("hi");
-      if ((front_dist.curr > 10 && !front_dist.out_of_range) && front_b_dist < 80) {
+      if ((front_dist.curr > 10 && !front_dist.out_of_range) && front_b_dist < 90) {
         curry_state = 'P';
         pickup_timer = millis();
+        evac_turn = Turn::NONE;
       }
-      
-      if (front_dist.curr < 18 || front_dist.out_of_range || (millis() - evac_forward_timer) > 18000) {
-        if (front_dist.out_of_range) {
-          see_out = true; // if you just use 'out_of_range' then it transitions from B to A like instantaneously
-        } else {
-          see_out = false;
-        }
+      if (front_dist.curr < 25 && front_dist.curr > 8 && !maybe_stuck) {
+        evac_stuck_timer = millis();
+        maybe_stuck = true;
+      }
+      else if (front_dist.curr < 8 || front_dist.out_of_range || ((millis() - evac_stuck_timer) > 6000 && maybe_stuck) /*|| (millis() - evac_forward_timer) > 18000*/) {
+        see_out = !!front_dist.out_of_range; // if you just use 'out_of_range' then it transitions from B to A like instantaneously
         evac_turn = r_side_dist > l_side_dist ? Turn::RIGHT : Turn::LEFT;
-        evac_time_start = millis();
-        curry_state = 'B';
-        rand_time = random(500, 1500);
+        curry_state = 'Q';
+        pickup_timer = millis();
         evac_forward_timer = millis();
-        evac_turn_time = rand_time;
-        evac_prev_rotation = rotation;
-        see_silver_tape = false;
         differentialSteer(0, 0);
+        maybe_stuck = false;
       }
 
       // Detecting the proximity + avoid rubbing the wall (Proportional)
-      if (r_side_dist < 80) {
+      if (r_side_dist < 70 && !see_ball) {
         double l_t = -constrain(20/(double)r_side_dist, 0, 1);
-        differentialSteer(0.9, l_t);
-      } else if (l_side_dist < 80) {
+        differentialSteer(1, l_t);
+      } else if (l_side_dist < 70 && !see_ball) {
         double r_t = constrain(20/(double)l_side_dist, 0, 1);
-        differentialSteer(0.9, r_t);
+        differentialSteer(1, r_t);
       } else {
-        differentialSteer(0.85, rotation);
+        differentialSteer(1, rotation);
       }
       
       // Random pickups
@@ -531,9 +632,12 @@ void loop() {
 //        pickup_timer = millis();
 //      }
       
-      if (ball_counter >= 3) {
+      if (ball_counter >= 3 || millis() - evac_limit_timer_start > 420000) {
         curry_state = 'G';
+        centering_timer = millis();
         claw_up();
+      } else {
+        claw_down();
       }
       
      }
@@ -541,16 +645,27 @@ void loop() {
 
      case 'B':
      {
+      if ((front_dist.curr > 10 && !front_dist.out_of_range) && front_b_dist < 90) {
+        curry_state = 'P';
+        pickup_timer = millis();
+        evac_turn = Turn::NONE;
+      }
       differentialSteer(0.9, 1 * (evac_turn == Turn::RIGHT ? 1 : -1) );
       if ( millis() - evac_time_start > evac_turn_time) {
         curry_state = 'A';
 //        Serial.println(curry_state);
 //        Serial.println("test");
+        ball_repeat_counter = 0;
         differentialSteer(0, 0);
       }
 
 
-      if (see_ball && !see_out) { // Quitting the evading turns (only do it when not looking outside)
+      if (see_ball && !see_out && ball_repeat_counter < 5) { // Quitting the evading turns (only do it when not looking outside)
+        // first time see -> start timer -> if timer exceed then stop doing this 
+        if (millis() - ball_repeat_timer < 1000) {
+          ball_repeat_counter++;
+        }
+        ball_repeat_timer = millis();
         curry_state = 'A';
         differentialSteer(0, 0);
 //        Serial.println("trigger");
@@ -568,10 +683,10 @@ void loop() {
         claw_down();
         claw_grab();
 //        Serial.println((millis() - pickup_timer));
-        if ((millis() - pickup_timer) > 500) {
+        if ((millis() - pickup_timer) > 400) {
           if (front_b_dist < 80) {
 //            Serial.println("hello");
-            if (front_b_dist > 35) {
+            if (front_b_dist > 30) {
               alive = !!see_silver_tape;
               curry_state = 'S';
               claw_up();
@@ -585,7 +700,15 @@ void loop() {
             }
           } else {
             claw_open();
-            curry_state = 'A';
+            if (evac_turn != Turn::NONE) {
+              curry_state = 'B';
+              evac_time_start = millis();
+              rand_time = random(1200, 2300);
+              evac_turn_time = rand_time;
+              evac_prev_rotation = rotation;
+            } else {
+              curry_state = 'A';
+            }
           }
         }
      }
@@ -593,8 +716,8 @@ void loop() {
      
      case 'Q':
      {
-      differentialSteer(-0.5, 0);
-      if (millis() - pickup_timer > 600) {
+      differentialSteer(-0.8, 0);
+      if (millis() - pickup_timer > 150) {
         differentialSteer(0, 0);
         pickup_timer = millis();
         curry_state = 'P';
@@ -607,6 +730,7 @@ void loop() {
        switch(pickup_state) {
         case 0:
         {
+          differentialSteer(-0.6, 0);
           if ((millis() - pickup_timer) > 1000) {
             pickup_state++;
             pickup_timer = millis();
@@ -630,6 +754,7 @@ void loop() {
             pickup_timer = millis();
             curry_state = 'A';
             ball_counter++;
+            differentialSteer(0, 0);
           }
         }
         break;
@@ -685,7 +810,7 @@ void loop() {
       double cen_s = constrain(f * s_k_p, 0.001, 1);
 //      Serial.println(cen_r);
       differentialSteer(0.92, pow(cen_r, cen_s));
-      if (fabs(s_r - 450) <= 150 && fabs(s_l - 450) <= 150 && fabs(diff) <= 65 && fabs(f - 30) <= 10) {
+      if (/*(fabs(s_r - 450) <= 100 && fabs(s_l - 450) <= 100 && fabs(diff) <= 65 && fabs(f - 30) <= 10) ||*/ (millis() - centering_timer > 15000)) {
         curry_state = 'H';
       }
      }
@@ -704,7 +829,7 @@ void loop() {
      case 'I':
      {
        differentialSteer(0.8, deposit_dev);
-       if ((millis() - evac_forward_timer) > 1000 && !see_deposit) {
+       if (((millis() - evac_forward_timer) > 1000 && !see_deposit) || front_dist.out_of_range) {
         curry_state = 'H';
        }
        if (front_b_dist < 42) {
@@ -739,7 +864,7 @@ void loop() {
           if ((millis() - deposit_timer) > 800) {
             deposit_state++;
             deposit_timer = millis();
-            servos_angle[Servos::COMPART] = 180 - 40;
+            servos_angle[Servos::COMPART] = 180 - 35;
             servo_change = true;
           }
         }
@@ -750,7 +875,7 @@ void loop() {
           if ((millis() - deposit_timer) > 1500) {
             deposit_state++;
             deposit_timer = millis();
-            servos_angle[Servos::COMPART] = 180 - 80;
+            servos_angle[Servos::COMPART] = 180 - 90;
             servo_change = true;
           }
         }
@@ -793,33 +918,41 @@ void loop() {
    }
    break;
 
+//6h BEFORE KENNETH
+
    //exiting evac
    case 'X':
    {
-    double dev_wall = constrain(((/*prev_l_side_dist*/70-l_side_dist) *  0.03), -0.2, 0.5);
+    double dev_wall = constrain(((/*prev_l_side_dist*/65-l_side_dist) *  0.04), -0.2, 0.5);
     differentialSteer(1, dev_wall);
 //    Serial.println(front_dist.curr);
 //    Serial.println(front_dist.out_of_range);
-    Serial.println(dev_wall);
+//    Serial.println(dev_wall);
 //    Serial.println(((prev_l_side_dist-l_side_dist) *  0.02));
     if (front_dist.out_of_range){
       see_out = true; 
-      prev_l_side_dist = 70;
+//      prev_l_side_dist = 70;
     } else {
       see_out = false; 
       prev_l_side_dist = l_side_dist;
     }
-    if (front_dist.curr <= 18 && !front_dist.out_of_range) {
+    if (front_dist.curr <= 17 && !front_dist.out_of_range) {
       exit_start_time = millis();
       curry_state = 'Y';
+    }
+    if (see_red) {
+      curry_state = 'T';
+    }
+    if(see_out && (l_side_dist > 500 && r_side_dist > 500)) {
+      differentialSteer(1, 0.35);
     }
    }
    break;
 
    case 'Y':
    {
-    Serial.print("Y: ");
-    Serial.println(l_side_dist);
+//    Serial.print("Y: ");
+//    Serial.println(l_side_dist);
     differentialSteer(1, 1);
 //    if ( millis() - exit_start_time > 1000 ) {
     if (l_side_dist > prev_l_side_dist && millis() - exit_start_time > 900) {
@@ -832,8 +965,8 @@ void loop() {
 
    case 'Z':
    {
-    Serial.println(curry_state);
-    Serial.print(millis()-exit_start_time);
+//    Serial.println(curry_state);
+//    Serial.print(millis()-exit_start_time);
     switch(exit_state) {
       case 0: {
         differentialSteer(-1, 0);
@@ -860,15 +993,132 @@ void loop() {
     }
    }
    break;
-//
-//   case 'T':
+
+   case 'T':
+   {
+    differentialSteer(0, 0);
+    if (!see_red) {
+      curry_state = 'X';
+    }
+   }
+   break;
+
+
+
+// AFTER KENNETH
+
+//   //exiting evac
+//   case 'X':
 //   {
-//    Serial.print(curry_state);
-//    
-//    exit_state = 0;
-//    curry_state = 'Z';
+//    double dev_wall = constrain(((/*prev_l_side_dist*/55-l_side_dist) *  0.03), -0.2, 0.5);
+//    differentialSteer(1, dev_wall);
+////    Serial.println(front_dist.curr);
+////    Serial.println(front_dist.out_of_range);
+////    Serial.println(dev_wall);
+////    Serial.println(((prev_l_side_dist-l_side_dist) *  0.02));
+//    if (front_dist.out_of_range){
+//      see_out = true; 
+//      if (l_side_dist - prev_l_side_dist > 200) {
+//        curry_state = 'T';
+//      }
+//    } else {
+//      see_out = false; 
+//      prev_l_side_dist = l_side_dist;
+//    }
+//    if (front_dist.curr <= 5 && !front_dist.out_of_range) {
+//      exit_start_time = millis();
+//      curry_state = 'Y';
+//    }
+//    if (see_red) {
+//      differentialSteer(0, 0);
+//    }
 //   }
 //   break;
+//
+//   case 'Y':
+//   {
+////    Serial.print("Y: ");
+////    Serial.println(l_side_dist);
+//    switch (exit_turn) {
+//      case 0:
+//      {
+//        differentialSteer(1, 0);
+//        if (millis() - exit_start_time > 2500) {
+//          exit_start_time = millis();
+//          exit_turn++;
+//        }
+//      }
+//      break;
+//
+//      case 1:
+//      {
+//        differentialSteer(-1, 0);
+//        if (millis()-exit_start_time > 600) {
+//          exit_start_time = millis();
+//          exit_turn++;
+//        }
+//      }
+//      break;
+//
+//      case 2: {
+//        differentialSteer(1, 1);
+//        if (millis() - exit_start_time > 1000) {
+//          differentialSteer(0, 0);
+//          exit_start_time = millis();
+//          exit_turn = 0;
+//          curry_state = 'X';
+//        }
+//      }
+//      break;
+//    }
+////    if ( millis() - exit_start_time > 1000 ) {
+//   
+//    prev_l_side_dist = l_side_dist;
+//   }
+//   break;
+//
+//   case 'Z':
+//   {
+////    Serial.println(curry_state);
+////    Serial.print(millis()-exit_start_time);
+//    switch(exit_state) {
+//      case 0: {
+//        differentialSteer(-1, 0);
+//        if (millis()-exit_start_time > 1000) {
+//          exit_state ++;
+//          exit_start_time = millis();
+//        }
+//      }
+//      break;
+//      case 1: {
+//        differentialSteer(1, 1);
+//        if (millis()-exit_start_time > 2000){
+//          exit_start_time = millis();
+//          exit_state ++;
+//        }
+//      }
+//      break;
+//      case 2: {
+//        differentialSteer(1, 0);
+//        if (millis()-exit_start_time > 2000) {
+//          exit_start_time = millis();
+//          exit_state++;
+//        }
+//      }
+//      break;
+//
+//      case 3: {
+//        differentialSteer(1, -1);
+//        if (millis()-exit_start_time > 500) {
+//          exit_start_time = millis();
+//          prev_l_side_dist = l_side_dist;
+//          curry_state = 'Y';
+//        }
+//      }
+//    }
+//   }
+//   break;
+//
 
     
     #endif
@@ -987,7 +1237,7 @@ void claw_pinch() {
 }
 
 void claw_arm_deposit() {
-  servos_angle[Servos::ARM] = 30;
+  servos_angle[Servos::ARM] = 55;
   servo_change = true;
 }
 

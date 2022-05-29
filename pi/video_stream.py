@@ -10,7 +10,8 @@ class VideoStream:
 		self.camera = cv.VideoCapture(0)
 		self.camera.set(cv.CAP_PROP_FRAME_WIDTH, resolution[1])
 		self.camera.set(cv.CAP_PROP_FRAME_HEIGHT, resolution[0])
-
+		self.__change_res = False
+		self.__res = resolution
 		self.frame = None
 		self.stop = False
 
@@ -24,13 +25,24 @@ class VideoStream:
 		# keep looping infinitely until the thread is stopped
 		while True:
 			if not self.stop:
-				ret, frame = self.camera.read()
-				if ret:
-					self.frame = frame
+				if self.__change_res:
+					self.__change_res = False
+					self.camera.set(cv.CAP_PROP_FRAME_WIDTH, self.__res[1])
+					self.camera.set(cv.CAP_PROP_FRAME_HEIGHT, self.__res[0])
+					time.sleep(3)
+				else:
+					ret, frame = self.camera.read()
+					if ret:
+						self.frame = frame
 			else:
 				self.camera.release()
+				time.sleep(2.5)
 				return
 
+	def change_res(self, resolution=(240, 320)):
+		self.__change_res = True
+		self.__res = resolution
+		return
 
 	def read(self):
 		# return the frame most recently read

@@ -127,7 +127,7 @@ def n_green_square(g_frame, g_thresh):
 			roi = g_col[max_black[i]:constrain(max_black[i]+50, max_black[i], g_col.shape[0])]
 			valid_green = np.sum(roi)/255
 			# print(roi)
-			if valid_green > 5: # there is green beneath black
+			if valid_green > 3: # there is green beneath black
 				if not ((i - prev_i) <= 3 and (i - prev_i) >= 0 and prev_i >= 0):
 					valid_cols.append([i])
 				prev_i = i
@@ -139,7 +139,7 @@ def n_green_square(g_frame, g_thresh):
 	if (g_frame.shape[1] - prev_i == 1 and prev_i >= 0):
 		valid_cols[len(valid_cols)-1].append(prev_i)
 	# print(valid_cols)
-	gs_list = list(filter(lambda xs: xs[-1] - xs[0] > 12, valid_cols))
+	gs_list = list(filter(lambda xs: xs[-1] - xs[0] > 8, valid_cols))
 
 	if len(gs_list) == 0 and len(gs_list) >= 3:
 		return None 
@@ -187,17 +187,20 @@ def rotation_scale(thresh:np.ndarray, deviation: float) -> float:
 	else:
 		return prev_rotation if FREEZE_ROTATION else deviation
 
-journey = []
-retreat = False
+# journey = []
+# retreat = False
+prev_see_blue = False
 def rescue_kit(blue_frame, deviation):
-	global journey, retreat
-	if np.sum(blue_frame) >= 2000000:
-		ser.write(b's' + struct.pack('f', 0) + b'\n')
-		time.sleep(2)
-		if PRINT_KIT:
-			print(journey)
-		retreat = True
-	elif np.sum(blue_frame) > 200000 and not retreat:
+	global prev_see_blue
+	# if np.sum(blue_frame) >= 2000000:
+		
+	# 	#claw.write() #TO-DO
+	# 	if PRINT_KIT:
+	# 		print(journey)
+	# 	retreat = True
+	
+	if np.sum(blue_frame) > 200000:
+		see_blue = True
 		if PRINT_KIT:
 			print("retrieving kit")
 			print(np.sum(blue_frame))
@@ -209,37 +212,45 @@ def rescue_kit(blue_frame, deviation):
 		if xBlue!=0:
 			deviation = math.atan(finalx/finaly)
 			format_deviation(deviation)
-			journey.append(deviation)
-	if retreat:
-		if len(journey)>0:
-			ser.write(b's' + struct.pack('f', -1) + b'\n')
-			if PRINT_KIT:
-				print(len(journey), journey)
-			deviation = journey[len(journey) - 1]
-			if PRINT_KIT:
-				print("retreating from kit")
-			journey.pop()
-		else:
-			ser.write(b's' + struct.pack('f', 1) + b'\n')
-			retreat = False
-	return deviation
+			# journey.append(deviation)
+	# if retreat:
+	# 	if len(journey)>0:
+	# 		ser.write(b's' + struct.pack('f', -1) + b'\n')
+	# 		if PRINT_KIT:
+	# 			print(len(journey), journey)
+	# 		deviation = journey[len(journey) - 1]
+	# 		if PRINT_KIT:
+	# 			print("retreating from kit")
+	# 		journey.pop()
+	# 	else:
+	# 		ser.write(b's' + struct.pack('f', 1) + b'\n')
+	# 		retreat = False
+	else:
+		see_blue = False
+	
+	if prev_see_blue != see_blue:
+		ser.write(b'k' + (int(see_blue)).to_bytes(1, "big") + b'\n')
+		print(see_blue)
+	
+	prev_see_blue = see_blue
+
+	return deviation, see_blue
 
 def format_deviation(deviation):
 	deviation *= k_p
 	deviation = deviation if deviation <= 1 else 1
 	deviation = deviation if deviation >= -1 else -1
 
+# cam = VideoStream(resolution=(e_dim["h"], e_dim["w"])).start()
 cam = VideoStream(resolution=(l_dim["h"], l_dim["w"])).start()
 curr_stage = MissionStage.LINE
 def transition_state(stage): # Just don't do anything if stage unknown
 	global curr_stage, cam
 	if stage == MissionStage.EVAC:
-		cam.kill()
-		cam = VideoStream(resolution=(e_dim["h"], e_dim["w"])).start()
+		cam.change_res()
 		curr_stage = stage
 	elif stage == MissionStage.LINE:
-		cam.kill()
-		cam = VideoStream(resolution=(l_dim["h"], l_dim["w"])).start()
+		cam.change_res(resolution=(l_dim["h"], l_dim["w"]))
 		curr_stage = stage
 
 # out = cv.VideoWriter('outpy.avi',cv.VideoWriter_fourcc('M','J','P','G'), 10, (l_dim["w"],l_dim["h"]))
@@ -250,7 +261,11 @@ curr = None
 start_time = 0
 start1_time = time.time()
 prev_see_line = False
+prev_st = False
 stop_movement = False
+
+erosion_size = 11
+element = cv.getStructuringElement(cv.MORPH_RECT, (2 * erosion_size + 1, 2 * erosion_size + 1), (erosion_size, erosion_size))
 
 start2_time = time.time()
 x1 = 1 # displays the frame rate every 1 second
@@ -270,6 +285,7 @@ while True:
 
 		frame_org_gray = cv.cvtColor(frame_org, cv.COLOR_BGR2GRAY)
 		t, thresh = cv.threshold(frame_org_gray, b_w_thresh, 255 ,cv.THRESH_BINARY_INV)
+		thresh = cv.bitwise_and(cv.bitwise_not(green_org), thresh)
 		g_thresh = thresh[gs_crop_h:(thresh.shape[0] - b_gs_crop_h), :]
 		w_thresh = cv.bitwise_not(thresh)
 		
@@ -295,8 +311,18 @@ while True:
 		# empty_index,  = np.where(np.sum(thresh, axis=1) == 0)
 		# bl_index = max(empty_index)	if empty_index.size > 0 else 0
 		bl_index_max, bl_index_min = get_black_endpoint(thresh)
+		# print(bl_index_max, bl_index_min)
 		# thresh[0:bl_index_min, :] = 0
-		thresh[0:int((bl_index_min + bl_index_max)/2), :] = 0
+		# gray_line = thresh.copy()
+		# cv.line(gray_line,(0, bl_index_max),(l_dim['w'] - 1,bl_index_max),255,2)
+		# cv.imwrite("bruh.png", gray_line)
+		# print(bl_index_max)
+		is_top_line = bl_index_max > (l_dim['h'] - 10)
+		if not is_top_line:
+			thresh[0:int(bl_index_max), :] = 0
+		# else:
+		# 	thresh[0:int(bl_index_min), :] = 0
+		# thresh[0:int((bl_index_min + bl_index_max)/2), :] = 0
 
 		edges = cv.Canny(thresh, 100, 200)
 
@@ -349,13 +375,16 @@ while True:
 			obs_frame = thresh[obs_crop_h:thresh.shape[0], :]
 			see_line = np.sum(obs_frame) > line_min
 			# print(np.sum(obs_frame))
-			if see_line:#!= prev_see_line:
+			if see_line != prev_see_line:
 				ser.write(b'l' + (1).to_bytes(1, "big") + b'\n')
 			prev_see_line = see_line
 
 			#* Main vector line-tracking logic
 			# dv = list(d_vector(thresh, scaled_m = scaled_m))
-			dv = list(d_vector(lt_thresh, h_scaled_v = scaled_v))#, w_scaled_v = w_scaled_v)
+			if not is_top_line:
+				dv = list(d_vector(lt_thresh, h_scaled_v = scaled_v))#, w_scaled_v = w_scaled_v)
+			else: 
+				dv = list(d_vector(lt_thresh, h_scaled_v = scaled_v_grad))
 			# print(dv)
 
 			deviation = 0
@@ -374,9 +403,10 @@ while True:
 			if PRINT_DEVIATION:
 				print(deviation)
 
-			# deviation = rescue_kit(blue_frame, deviation)
+			#*Rescue kit
+			deviation, see_blue = rescue_kit(blue_frame, deviation)
 
-			#* Halt if deivation == 1
+			#* Halt if deviation == 1
 			# if abs(deviation) > 0.999999:
 			# 	speed(0)
 			# 	while True:
@@ -390,19 +420,24 @@ while True:
 			# 	rotation = rotation if white_density > 0.005 else 0
 
 			#* Detecting silver tape
-			if bl_index_max < (l_dim['h'] - 80):
-				norm_var = normalized_var(frame_org_gray, bl_index_max, 20, w_thresh)
-				if norm_var:
-					if norm_var > 25:
+			if bl_index_max > (l_dim['h'] - 40) and bl_index_max < l_dim['h']-5 and not see_blue:
+				norm_var = normalized_var(frame_org_gray, bl_index_max, 6)
+				if norm_var and np.sum(thresh[(l_dim['h'] - 90) :(l_dim['h'] - 1)])/255 < 200:
+					if norm_var > 3.8:
 						pass
-						# ser.write(b't' + (1).to_bytes(1, "big") + b'\n')
-						# transition_state(MissionStage.EVAC)
+						# write_speed(0)
+						# while True:
+						# 	print(norm_var, bl_index_max, np.sum(thresh))
+						# 	cv.imwrite(thresh)
+							# cv.imwrite("gay.png", roi)
+							# cv.imwrite("henlo.png", frame_org_gray[(bl_index_max-6):(bl_index_max), :])
+						transition_state(MissionStage.EVAC)
+						ser.write(b't' + (1).to_bytes(1, "big") + b'\n')
 				print(norm_var)
-
 			# if not freeze_rotation:
-			# 	white_density = np.sum(w_thresh)/(w_thresh.shape[0] * w_thresh.shape[1] * 255)
-			# 	print(white_density)
-			# 	rotation = rotation if white_density < 0.9 else 0
+			# white_density = np.sum(w_thresh)/(w_thresh.shape[0] * w_thresh.shape[1] * 255)
+			# print(white_density)
+			# rotation = rotation if white_density < 0.90 else 0
 		
 		write_rotation(rotation)
 		
@@ -413,7 +448,7 @@ while True:
 		gray_org = cv.cvtColor(frame_org, cv.COLOR_BGR2GRAY)
 		t, thresh = cv.threshold(gray_org, b_w_thresh, 255 ,cv.THRESH_BINARY_INV)
 
-		circles = cv.HoughCircles(gray_org, cv.HOUGH_GRADIENT, 1.2, 70, param1 = 200 , param2 =27)
+		circles = cv.HoughCircles(gray_org, cv.HOUGH_GRADIENT, 1.2, 70, param1 = 200 , param2 = 23)
 		
 		balls = []
 		if circles is not None:
@@ -433,9 +468,9 @@ while True:
 		if len(balls) > 0:
 			biggest_ball = max(balls, key=lambda b: b['r'])
 			#TODO Adjust this constant
-			ball_dev = (biggest_ball['x'] - e_dim["w"]/2) * 0.01
-			# print(ball_dev)
-			ball_dev = constrain(ball_dev, -0.8, 0.8)
+			ball_dev = (biggest_ball['x'] - e_dim["w"]/2) * 0.011
+			print("bruh")
+			ball_dev = constrain(ball_dev, -0.9, 0.9)
 			ball_mask = cv.circle(ball_mask, (int(biggest_ball['x']),int(biggest_ball['y'])), int(biggest_ball['r']), 0, -1)
 			ser.write(b'b' + (1).to_bytes(1, "big") + b'\n')
 			ser.write(b'r' + struct.pack('f', ball_dev) + b'\n') 
@@ -444,28 +479,44 @@ while True:
 			ser.write(b'r' + struct.pack('f', 0) + b'\n')
 
 		#* Detecting for silver tape
-		silver_mask = cv.bitwise_and(ball_mask, cv.bitwise_not(thresh))
-		st = ((n := normalized_var(gray_org, 30, 15, mask = silver_mask)) > 10)
-		# print(n)
-		if st:
-			ser.write(b't' + (1).to_bytes(1, "big") + b'\n')
-
+		# silver_mask = cv.bitwise_and(ball_mask, cv.bitwise_not(thresh))
+		st = ((n := normalized_var(gray_org, e_dim['h'] - 200, 20)) > 40)
+		# print("s ", n)
+		if st != prev_st:
+			ser.write(b't' + (int(st)).to_bytes(1, "big") + b'\n')
+			# print('s')
+		prev_st = st
 		#* Detecting (a) if you see the deposit (b) if a, then find the deviation of black centroid
-		if (s := (np.sum(thresh)/255)) >= 2_300: #?
+		# ser.write(b'd' + (1).to_bytes(1, "big") + b'\n') #!!!!
+		# ser.write(b'D' + struct.pack('f', 0) + b'\n')
+		eroded = cv.erode(thresh, element, iterations=2)
+		contours,hierarchy = cv.findContours(eroded, 1, 2)
+		f_contours = list(filter(lambda cnt: cv.contourArea(cnt) > 1500, contours))
+		print(list(map(lambda cnt: cv.contourArea(cnt), f_contours)))
+		if (s := len(f_contours)) == 1: #?
 			ser.write(b'd' + (1).to_bytes(1, "big") + b'\n')
 
-			black_M = cv.moments(thresh)
+			black_M = cv.moments(max(f_contours, key=lambda k: cv.contourArea(k)))
 			black_cX = int(black_M["m10"] / black_M["m00"])
 
 			dep_dev = (black_cX - e_dim['w']/2) * 0.007
 			dep_dev = constrain(dep_dev, -0.6, 0.6)
-			# print(s, dep_dev)
+			print("D ", s)
 
 			ser.write(b'D' + struct.pack('f', dep_dev) + b'\n')
 		else: 
-			# print(s)
 			ser.write(b'd' + (0).to_bytes(1, "big") + b'\n')
 	# ser.flush()
+
+		#*Stopping outside of evac
+		if see_stop(frame_org_hsv, 90, 10):
+			if not stop_movement:
+				ser.write(b'x' + (1).to_bytes(1, "big") + b'\n')
+				stop_movement = True
+		else: 
+			if stop_movement:
+				ser.write(b'x' + (0).to_bytes(1, "big") + b'\n')
+				stop_movement = False
 
 	#* recording thingy for kenneth
 	# if (time.time() - start1_time) > 17:

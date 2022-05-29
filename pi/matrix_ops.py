@@ -162,19 +162,22 @@ def get_black_endpoint(thresh):
 	"""
 	# 0 => white, 1 => black
 	empty_index,  = np.where(np.sum(thresh, axis=1) == 0)
+	# print(empty_index)
 	# This tries to find columns that are all white
 	bl_index_max = max(empty_index)	if empty_index.size > 0 else 0
 	bl_index_min = min(empty_index)	if empty_index.size > 0 else 0
 	return bl_index_max, bl_index_min
 
 def normalized_var(gray_org, bl_index:int, epsilon:int, mask=None):
-	roi = gray_org[(bl_index - epsilon):(bl_index + epsilon), :]
+	# roi = gray_org[(bl_index - epsilon):(bl_index + epsilon), :]
+	roi = gray_org[(bl_index-epsilon):(bl_index), :]
+	# cv.imwrite("norm_var.png", roi)
 	if roi.size > 0:
 		if mask is None:	
 			mean, std = cv.meanStdDev(roi)
 			return ((std[0][0]) ** 2)/mean[0][0]
 		else:
-			roi_mask = mask[(bl_index - epsilon):(bl_index + epsilon), :]
+			roi_mask = mask[(bl_index - epsilon):(bl_index), :]
 			if roi_mask.size > 0:
 				mean, std = cv.meanStdDev(roi, mask=roi_mask)
 				return ((std[0][0]) ** 2)/mean[0][0]
